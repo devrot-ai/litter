@@ -1,0 +1,14 @@
+ultralytics>=8.3.4
+opencv-python>=4.10.0.84
+torch>=2.11.0
+torchvision>=0.26.0
+easyocr>=1.7.2
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.6
+sqlalchemy>=2.0.35
+pydantic>=2.9.2
+python-multipart>=0.0.9
+streamlit>=1.56.0
+numpy>=2.4.4
+python-dotenv>=1.0.1
+requests>=2.33.1
