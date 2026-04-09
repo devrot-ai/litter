@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import time
 from typing import Deque, Dict, List, Tuple
 from urllib import error, request
 
@@ -35,7 +36,12 @@ class LitteringPipeline:
         self.logic = LitterHeuristicEngine(config)
         self.evidence = EvidenceWriter(config.evidence_dir, config.clips_dir)
 
-    def process_video(self, video_path: str) -> Dict[str, int]:
+    def process_video(
+        self,
+        video_path: str,
+        max_seconds: float | None = None,
+        max_frames: int | None = None,
+    ) -> Dict[str, int]:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video: {video_path}")
@@ -52,8 +58,13 @@ class LitteringPipeline:
 
         processed_frames = 0
         emitted_events = 0
+        start_time = time.monotonic()
 
         while True:
+            if max_seconds is not None and (time.monotonic() - start_time) >= max_seconds:
+                break
+            if max_frames is not None and processed_frames >= max_frames:
+                break
             ok, frame = cap.read()
             if not ok:
                 break
