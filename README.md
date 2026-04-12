@@ -1,4 +1,4 @@
- Built a traffic-side littering detection MVP that tracks vehicles, flags throw events, reads plates, and saves evidence ready for human review built for the ruckus cause by the overpoplution and poor road management for making life a bit easier 
+ any of the suggestion are most welcome Built a traffic-side littering detection MVP that tracks vehicles, flags throw events, reads plates, and saves evidence ready for human review built for the ruckus cause by the overpoplution and poor road management for making life a bit easier 
 
 Tech:
 - YOLOv8 + ByteTrack for vehicle detection/tracking
