@@ -32,6 +32,16 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/")
+def root() -> dict:
+    return {
+        "service": "Littering MVP API",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
 def _row_to_response(row: ViolationEvent) -> ViolationEvent:
     if isinstance(row.metadata_json, str):
         row.metadata_json = json.loads(row.metadata_json or "{}")
