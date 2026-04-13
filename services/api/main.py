@@ -4,6 +4,7 @@ import json
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
@@ -32,14 +33,92 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/")
-def root() -> dict:
-    return {
-        "service": "Littering MVP API",
-        "status": "ok",
-        "docs": "/docs",
-        "health": "/health",
-    }
+@app.get("/", response_class=HTMLResponse)
+def root() -> str:
+        return """
+        <!doctype html>
+        <html lang="en">
+            <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <title>Littering MVP API</title>
+                <style>
+                    :root {
+                        --bg: #f4f6f2;
+                        --card: #ffffff;
+                        --text: #1f2a1f;
+                        --muted: #5a665a;
+                        --accent: #1f7a4d;
+                        --accent-2: #145a38;
+                        --border: #d9e2d9;
+                    }
+                    body {
+                        margin: 0;
+                        min-height: 100vh;
+                        display: grid;
+                        place-items: center;
+                        background: radial-gradient(circle at top left, #e7efe6 0%, var(--bg) 55%);
+                        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+                        color: var(--text);
+                    }
+                    .card {
+                        width: min(680px, 92vw);
+                        background: var(--card);
+                        border: 1px solid var(--border);
+                        border-radius: 18px;
+                        padding: 28px;
+                        box-shadow: 0 12px 28px rgba(28, 48, 30, 0.09);
+                    }
+                    h1 {
+                        margin: 0 0 10px;
+                        font-size: 1.9rem;
+                    }
+                    p {
+                        margin: 0 0 18px;
+                        color: var(--muted);
+                        line-height: 1.5;
+                    }
+                    .links {
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 10px;
+                    }
+                    a {
+                        text-decoration: none;
+                        padding: 10px 14px;
+                        border-radius: 10px;
+                        border: 1px solid var(--border);
+                        color: var(--accent-2);
+                        font-weight: 600;
+                        transition: all 160ms ease;
+                    }
+                    a.primary {
+                        background: var(--accent);
+                        border-color: var(--accent);
+                        color: #fff;
+                    }
+                    a:hover {
+                        transform: translateY(-1px);
+                        box-shadow: 0 6px 14px rgba(31, 122, 77, 0.2);
+                    }
+                </style>
+            </head>
+            <body>
+                <main class="card">
+                    <h1>Littering MVP API is Live</h1>
+                    <p>
+                        Server is healthy and ready. Use the API docs to test routes, or open
+                        health check for quick status.
+                    </p>
+                    <div class="links">
+                        <a class="primary" href="/docs">Open API Docs</a>
+                        <a href="/health">Health Check</a>
+                        <a href="/violations">Sample Violations List</a>
+                    </div>
+                </main>
+            </body>
+        </html>
+        """
 
 
 def _row_to_response(row: ViolationEvent) -> ViolationEvent:
