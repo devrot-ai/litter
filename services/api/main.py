@@ -779,7 +779,7 @@ def root() -> str:
 
                     <section class="hero glass" id="hero">
                         <video autoplay muted loop playsinline>
-                            <source src="https://videos.pexels.com/video-files/3254014/3254014-hd_1920_1080_25fps.mp4" type="video/mp4" />
+                            <source src="https://samplelib.com/lib/preview/mp4/sample-5s.mp4" type="video/mp4" />
                         </video>
                         <div class="hero-content">
                             <span class="tag">Real-time civic enforcement intelligence</span>
@@ -834,7 +834,7 @@ def root() -> str:
                                 <h3>Video Feed</h3>
                                 <div class="video-wrap">
                                     <video id="demoVideo" controls muted playsinline>
-                                        <source id="demoSource" src="https://videos.pexels.com/video-files/3254014/3254014-hd_1920_1080_25fps.mp4" type="video/mp4" />
+                                        <source id="demoSource" src="https://filesamples.com/samples/video/mp4/sample_640x360.mp4" type="video/mp4" />
                                     </video>
                                     <div class="bbox one"></div>
                                     <div class="bbox two"></div>
@@ -1001,6 +1001,7 @@ def root() -> str:
                     const simulateBtn = document.getElementById("simulateBtn");
                     const videoUpload = document.getElementById("videoUpload");
                     const demoVideo = document.getElementById("demoVideo");
+                      let localRows = [];
 
                     function showStatus(message) {
                         statusText.textContent = message;
@@ -1039,6 +1040,18 @@ def root() -> str:
                         document.getElementById("confidenceLabel").textContent = toPercent(row.detection_confidence || 0.0);
                         document.getElementById("eventLabel").textContent = row.event_id || "-";
                         document.getElementById("reviewLabel").textContent = row.status || "PENDING";
+                    }
+
+                    function normalizeRows(rows) {
+                        return [...rows].sort((a, b) => Number(b.timestamp_ms || 0) - Number(a.timestamp_ms || 0));
+                    }
+
+                    function getVisibleRows() {
+                        const selected = statusFilter.value;
+                        if (!selected) {
+                            return normalizeRows(localRows);
+                        }
+                        return normalizeRows(localRows.filter((row) => String(row.status || "").toUpperCase() === selected));
                     }
 
                     function renderRows(rows) {
@@ -1120,12 +1133,25 @@ def root() -> str:
                             if (!response.ok) {
                                 throw new Error("Unable to load violations");
                             }
-                            const rows = await response.json();
-                            renderRows(rows);
-                            setMetrics(rows);
-                            showStatus("Loaded " + rows.length + " records.");
+                            const serverRows = await response.json();
+
+                            if (serverRows.length) {
+                                localRows = normalizeRows(serverRows);
+                            }
+
+                            const visibleRows = getVisibleRows();
+                            renderRows(visibleRows);
+                            setMetrics(localRows);
+                            showStatus("Loaded " + visibleRows.length + " records.");
                         } catch (error) {
-                            showStatus("Error: " + error.message);
+                            if (localRows.length) {
+                                const visibleRows = getVisibleRows();
+                                renderRows(visibleRows);
+                                setMetrics(localRows);
+                                showStatus("Using local session data. Sync error: " + error.message);
+                            } else {
+                                showStatus("Error: " + error.message);
+                            }
                         }
                     }
 
@@ -1141,6 +1167,14 @@ def root() -> str:
                                 const text = await response.text();
                                 throw new Error(text || "Status update failed");
                             }
+
+                            localRows = localRows.map((row) => {
+                                if (row.event_id === eventId) {
+                                    return { ...row, status: nextStatus };
+                                }
+                                return row;
+                            });
+
                             await fetchViolations();
                         } catch (error) {
                             showStatus("Update failed: " + error.message);
@@ -1182,6 +1216,7 @@ def root() -> str:
                         showStatus("Creating violation event...");
                         try {
                             const result = await createViolation(payload);
+                            localRows = normalizeRows([result, ...localRows.filter((row) => row.event_id !== result.event_id)]);
                             setDetectionOutput(result);
                             await fetchViolations();
                             showStatus("Violation created successfully.");
@@ -1210,6 +1245,7 @@ def root() -> str:
                         showStatus("Running detection simulation...");
                         try {
                             const result = await createViolation(payload);
+                            localRows = normalizeRows([result, ...localRows.filter((row) => row.event_id !== result.event_id)]);
                             setDetectionOutput(result);
                             await fetchViolations();
                             showStatus("Simulation completed and saved.");
