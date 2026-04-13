@@ -431,6 +431,11 @@ def root() -> str:
                         gap: 10px;
                     }
 
+                    .demo-controls input {
+                        flex: 1 1 320px;
+                        min-width: 240px;
+                    }
+
                     .upload {
                         position: relative;
                         border-radius: 10px;
@@ -448,7 +453,40 @@ def root() -> str:
                         cursor: pointer;
                     }
 
+                    .integration-box {
+                        margin-top: 12px;
+                        padding: 12px;
+                        border-radius: 12px;
+                        border: 1px solid rgba(150, 175, 208, 0.2);
+                        background: rgba(9, 18, 30, 0.72);
+                    }
+
+                    .integration-box h4 {
+                        margin: 0 0 8px;
+                        font-size: 0.92rem;
+                    }
+
+                    .token-row {
+                        display: flex;
+                        gap: 8px;
+                        flex-wrap: wrap;
+                        align-items: center;
+                    }
+
+                    .token-row input {
+                        flex: 1 1 240px;
+                        min-width: 180px;
+                    }
+
+                    .mini-note {
+                        margin: 8px 0 0;
+                        color: var(--muted);
+                        font-size: 0.82rem;
+                        line-height: 1.45;
+                    }
+
                     .panel button,
+                    .panel input,
                     .form-grid button,
                     .console button,
                     .console input,
@@ -844,9 +882,13 @@ def root() -> str:
                                     <label class="upload">Upload Demo Video
                                         <input id="videoUpload" type="file" accept="video/*" />
                                     </label>
+                                    <input id="streamUrlInput" type="url" placeholder="https://your-cctv-gateway/live/cam-01.m3u8 or .mp4" />
+                                    <button id="loadStreamBtn" type="button">Connect Live Stream</button>
+                                    <button id="resetDemoVideoBtn" type="button">Use Default Feed</button>
                                     <button id="simulateBtn" class="primary" type="button">Run Detection Simulation</button>
                                     <a class="btn secondary" href="/docs">Try Endpoints</a>
                                 </div>
+                                <p class="mini-note">For CCTV integrations use HTTPS HLS or MP4 gateway URLs. Raw RTSP links are not directly playable in browsers.</p>
                             </article>
                             <article class="panel glass">
                                 <h3>Detection Output</h3>
@@ -856,6 +898,15 @@ def root() -> str:
                                     <div class="output-item"><span>Confidence:</span><strong id="confidenceLabel">92%</strong></div>
                                     <div class="output-item"><span>Event ID:</span><strong id="eventLabel">-</strong></div>
                                     <div class="output-item"><span>Review Status:</span><strong id="reviewLabel">PENDING</strong></div>
+                                </div>
+                                <div class="integration-box">
+                                    <h4>API Access Key</h4>
+                                    <div class="token-row">
+                                        <input id="apiKeyInput" type="password" placeholder="Enter your API key" />
+                                        <button id="saveApiKeyBtn" class="primary" type="button">Save Key</button>
+                                        <button id="resetApiKeyBtn" type="button">Use Default Key</button>
+                                    </div>
+                                    <p class="mini-note" id="apiKeyHint"></p>
                                 </div>
                             </article>
                         </div>
@@ -1001,10 +1052,57 @@ def root() -> str:
                     const simulateBtn = document.getElementById("simulateBtn");
                     const videoUpload = document.getElementById("videoUpload");
                     const demoVideo = document.getElementById("demoVideo");
-                      let localRows = [];
+                    const streamUrlInput = document.getElementById("streamUrlInput");
+                    const loadStreamBtn = document.getElementById("loadStreamBtn");
+                    const resetDemoVideoBtn = document.getElementById("resetDemoVideoBtn");
+                    const apiKeyInput = document.getElementById("apiKeyInput");
+                    const saveApiKeyBtn = document.getElementById("saveApiKeyBtn");
+                    const resetApiKeyBtn = document.getElementById("resetApiKeyBtn");
+                    const apiKeyHint = document.getElementById("apiKeyHint");
+                    const DEFAULT_DEMO_VIDEO_URL = "https://filesamples.com/samples/video/mp4/sample_640x360.mp4";
+                    const DEFAULT_API_KEY = "LITTERCAM_DEMO_KEY";
+                    const API_KEY_STORAGE = "littercam_api_key";
+                    let localRows = [];
 
                     function showStatus(message) {
                         statusText.textContent = message;
+                    }
+
+                    function currentApiKey() {
+                        const key = String(apiKeyInput.value || "").trim();
+                        return key || DEFAULT_API_KEY;
+                    }
+
+                    function updateApiKeyHint() {
+                        const isDefault = currentApiKey() === DEFAULT_API_KEY;
+                        apiKeyHint.textContent = isDefault
+                            ? "Using default key for first-time access. Add your own key for private integrations."
+                            : "Custom API key active for this browser session.";
+                    }
+
+                    function initializeApiKey() {
+                        const storedKey = localStorage.getItem(API_KEY_STORAGE);
+                        if (storedKey && String(storedKey).trim()) {
+                            apiKeyInput.value = String(storedKey).trim();
+                        } else {
+                            apiKeyInput.value = DEFAULT_API_KEY;
+                            localStorage.setItem(API_KEY_STORAGE, DEFAULT_API_KEY);
+                        }
+                        updateApiKeyHint();
+                    }
+
+                    function persistApiKey() {
+                        localStorage.setItem(API_KEY_STORAGE, currentApiKey());
+                        updateApiKeyHint();
+                    }
+
+                    async function apiFetch(url, options = {}) {
+                        const nextOptions = { ...options };
+                        nextOptions.headers = {
+                            ...(options.headers || {}),
+                            "x-api-key": currentApiKey(),
+                        };
+                        return fetch(url, nextOptions);
                     }
 
                     function randomPlate() {
@@ -1129,7 +1227,7 @@ def root() -> str:
                         const query = status ? "?status=" + encodeURIComponent(status) + "&limit=200" : "?limit=200";
                         showStatus("Loading violations...");
                         try {
-                            const response = await fetch("/violations" + query);
+                            const response = await apiFetch("/violations" + query);
                             if (!response.ok) {
                                 throw new Error("Unable to load violations");
                             }
@@ -1158,7 +1256,7 @@ def root() -> str:
                     async function updateStatus(eventId, nextStatus) {
                         showStatus("Updating " + eventId + "...");
                         try {
-                            const response = await fetch("/violations/" + encodeURIComponent(eventId) + "/status", {
+                            const response = await apiFetch("/violations/" + encodeURIComponent(eventId) + "/status", {
                                 method: "PATCH",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ status: nextStatus, review_note: "updated from web console" }),
@@ -1182,7 +1280,7 @@ def root() -> str:
                     }
 
                     async function createViolation(payload) {
-                        const response = await fetch("/violations", {
+                        const response = await apiFetch("/violations", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify(payload),
@@ -1261,12 +1359,55 @@ def root() -> str:
                         }
                         const objectUrl = URL.createObjectURL(file);
                         demoVideo.src = objectUrl;
+                        streamUrlInput.value = "";
                         demoVideo.play().catch(() => {});
                         showStatus("Loaded local demo video: " + file.name);
                     });
 
+                    loadStreamBtn.addEventListener("click", () => {
+                        const streamUrl = String(streamUrlInput.value || "").trim();
+                        if (!streamUrl) {
+                            showStatus("Enter an HTTPS stream URL to connect CCTV feed.");
+                            return;
+                        }
+                        const isHttpStream =
+                            streamUrl.startsWith("https://") || streamUrl.startsWith("http://");
+                        if (!isHttpStream) {
+                            showStatus("Stream URL must start with http:// or https://.");
+                            return;
+                        }
+
+                        demoVideo.src = streamUrl;
+                        demoVideo.load();
+                        demoVideo
+                            .play()
+                            .then(() => showStatus("Connected to live stream source."))
+                            .catch(() => showStatus("Stream loaded. Press play if browser blocked autoplay."));
+                    });
+
+                    resetDemoVideoBtn.addEventListener("click", () => {
+                        demoVideo.src = DEFAULT_DEMO_VIDEO_URL;
+                        streamUrlInput.value = "";
+                        demoVideo.load();
+                        showStatus("Switched to default demo feed.");
+                    });
+
+                    saveApiKeyBtn.addEventListener("click", () => {
+                        persistApiKey();
+                        showStatus("API key saved for this browser.");
+                    });
+
+                    resetApiKeyBtn.addEventListener("click", () => {
+                        apiKeyInput.value = DEFAULT_API_KEY;
+                        persistApiKey();
+                        showStatus("Reverted to default API key.");
+                    });
+
+                    apiKeyInput.addEventListener("input", updateApiKeyHint);
+
                     refreshBtn.addEventListener("click", fetchViolations);
                     statusFilter.addEventListener("change", fetchViolations);
+                    initializeApiKey();
                     fetchViolations();
                 </script>
             </body>
