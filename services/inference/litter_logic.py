@@ -20,6 +20,7 @@ class TrackState:
     vehicle_centers: Deque[Point] = field(default_factory=lambda: deque(maxlen=4))
     last_blob_center: Point | None = None
     outward_steps: int = 0
+    last_outward_delta: float = 0.0
     last_event_frame: int = -1_000_000
 
 
@@ -28,6 +29,8 @@ class LitterHeuristicEngine:
         self.config = config
         self.prev_gray = None
         self.states: Dict[int, TrackState] = defaultdict(TrackState)
+        self.litter_labels = set(config.litter_labels)
+        self.non_litter_labels = set(config.non_litter_labels)
 
     def update(
         self,
@@ -54,21 +57,29 @@ class LitterHeuristicEngine:
 
             selected = self._nearest_blob(vehicle.bbox, blobs)
             if selected is None:
+                state.last_blob_center = None
+                state.outward_steps = max(0, state.outward_steps - 1)
+                state.last_outward_delta = 0.0
                 continue
 
             blob_center = selected["center"]
             blob_bbox = selected["bbox"]
-            blob_conf = selected["confidence"]
+            blob_conf = float(selected["confidence"])
+            blob_label = str(selected.get("label", "")).strip().lower()
+            attach_distance_px = float(selected.get("attach_distance_px", self.config.attach_distance_px))
 
             if state.last_blob_center is not None:
                 prev_dist = distance(state.last_blob_center, v_center)
                 curr_dist = distance(blob_center, v_center)
-                if curr_dist - prev_dist >= self.config.outward_step_px:
+                delta = curr_dist - prev_dist
+                state.last_outward_delta = max(0.0, delta)
+                if delta >= self.config.outward_step_px:
                     state.outward_steps += 1
                 else:
                     state.outward_steps = max(0, state.outward_steps - 1)
             else:
                 state.outward_steps = 0
+                state.last_outward_delta = 0.0
 
             state.last_blob_center = blob_center
 
@@ -76,6 +87,17 @@ class LitterHeuristicEngine:
                 continue
 
             if state.outward_steps >= self.config.confirm_steps:
+                base_score = self._score_candidate(
+                    blob_conf=blob_conf,
+                    outward_steps=state.outward_steps,
+                    outward_delta=state.last_outward_delta,
+                    attach_distance_px=attach_distance_px,
+                )
+                verdict, confidence, verdict_reason = self._decide_verdict(
+                    base_score=base_score,
+                    blob_label=blob_label,
+                    blob_conf=blob_conf,
+                )
                 state.last_event_frame = frame_index
                 state.outward_steps = 0
                 candidates.append(
@@ -84,9 +106,12 @@ class LitterHeuristicEngine:
                         vehicle_track_id=vehicle.track_id,
                         vehicle_bbox=vehicle.bbox,
                         object_bbox=blob_bbox,
-                        confidence=min(0.95, 0.45 + 0.2 * self.config.confirm_steps + blob_conf * 0.2),
-                        reason="motion_outward_from_vehicle",
+                        confidence=confidence,
+                        reason=f"motion_outward_from_vehicle|{verdict_reason}",
                         timestamp_ms=timestamp_ms,
+                        verdict=verdict,
+                        object_label=blob_label,
+                        object_confidence=blob_conf,
                     )
                 )
 
@@ -107,6 +132,7 @@ class LitterHeuristicEngine:
                     "center": c,
                     "bbox": (x1, y1, x2, y2),
                     "confidence": float(det.get("confidence", 0.5)),
+                    "label": str(det.get("label", "")).strip().lower(),
                 }
             )
 
@@ -132,6 +158,7 @@ class LitterHeuristicEngine:
                     "center": center_of_bbox(bbox),
                     "bbox": bbox,
                     "confidence": min(0.8, area / self.config.max_blob_area),
+                    "label": "",
                 }
             )
 
@@ -147,9 +174,63 @@ class LitterHeuristicEngine:
                 continue
             if d < best_score:
                 best_score = d
-                best = blob
+                best = {
+                    **blob,
+                    "attach_distance_px": d,
+                }
 
         return best
+
+    def _score_candidate(
+        self,
+        blob_conf: float,
+        outward_steps: int,
+        outward_delta: float,
+        attach_distance_px: float,
+    ) -> float:
+        steps_goal = max(self.config.confirm_steps, 1)
+        steps_signal = min(1.0, outward_steps / steps_goal)
+        outward_signal = min(1.0, outward_delta / max(float(self.config.outward_step_px), 1.0))
+        attach_signal = max(0.0, 1.0 - (attach_distance_px / max(float(self.config.attach_distance_px), 1.0)))
+        object_signal = max(0.0, min(blob_conf, 1.0))
+
+        score = (
+            0.38
+            + 0.24 * steps_signal
+            + 0.18 * outward_signal
+            + 0.10 * attach_signal
+            + 0.10 * object_signal
+        )
+        return max(0.0, min(0.98, score))
+
+    def _decide_verdict(self, base_score: float, blob_label: str, blob_conf: float) -> tuple[str, float, str]:
+        adjusted = base_score
+        reason_tokens: List[str] = []
+        label = blob_label.strip().lower()
+        has_strong_label = blob_conf >= self.config.min_label_confidence
+
+        if label:
+            reason_tokens.append(f"label={label}")
+
+        if label and has_strong_label and label in self.litter_labels:
+            adjusted = min(0.98, adjusted + 0.12)
+            reason_tokens.append("label_support=litter")
+        elif label and has_strong_label and label in self.non_litter_labels:
+            adjusted = max(0.0, adjusted - 0.24)
+            reason_tokens.append("label_support=non_litter")
+
+        min_litter_conf = max(self.config.min_litter_confidence, self.config.uncertain_confidence_floor + 0.01)
+        uncertain_floor = min(self.config.uncertain_confidence_floor, min_litter_conf - 0.01)
+
+        if adjusted >= min_litter_conf:
+            verdict = "LITTER"
+        elif adjusted >= uncertain_floor:
+            verdict = "UNCERTAIN"
+        else:
+            verdict = "NOT_LITTER"
+
+        reason_tokens.append(f"score={adjusted:.2f}")
+        return verdict, adjusted, ",".join(reason_tokens)
 
     def _is_vehicle_moving(self, centers: Deque[Point]) -> bool:
         if len(centers) < 2:

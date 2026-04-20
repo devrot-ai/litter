@@ -48,8 +48,9 @@ class VehicleTracker:
 
 
 class LitterObjectDetector:
-    def __init__(self, model_path: Optional[str]) -> None:
+    def __init__(self, model_path: Optional[str], min_confidence: float = 0.0) -> None:
         self.model = None
+        self.min_confidence = min_confidence
         if model_path and Path(model_path).exists():
             self.model = YOLO(model_path)
 
@@ -70,11 +71,15 @@ class LitterObjectDetector:
             result.boxes.conf.cpu().numpy(),
             result.boxes.cls.cpu().numpy(),
         ):
+            conf_value = float(conf)
+            if conf_value < self.min_confidence:
+                continue
+
             x1, y1, x2, y2 = [int(v) for v in box]
             detections.append(
                 {
                     "bbox": (x1, y1, x2, y2),
-                    "confidence": float(conf),
+                    "confidence": conf_value,
                     "label": names[int(cls_idx)],
                 }
             )

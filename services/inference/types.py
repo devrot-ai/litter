@@ -28,5 +28,8 @@ class LitterCandidate:
     confidence: float
     reason: str
     timestamp_ms: int
+    verdict: str = "UNCERTAIN"
+    object_label: str = ""
+    object_confidence: float = 0.0
     plate_text: Optional[str] = None
     plate_confidence: float = 0.0

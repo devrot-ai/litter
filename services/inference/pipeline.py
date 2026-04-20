@@ -31,7 +31,10 @@ class LitteringPipeline:
         self.camera_id = camera_id
 
         self.vehicle_tracker = VehicleTracker(config.vehicle_model)
-        self.litter_detector = LitterObjectDetector(config.litter_model)
+        self.litter_detector = LitterObjectDetector(
+            config.litter_model,
+            min_confidence=config.min_object_confidence,
+        )
         self.plate_reader = PlateReader()
         self.logic = LitterHeuristicEngine(config)
         self.evidence = EvidenceWriter(config.evidence_dir, config.clips_dir)
@@ -58,6 +61,10 @@ class LitteringPipeline:
 
         processed_frames = 0
         emitted_events = 0
+        confirmed_events = 0
+        uncertain_events = 0
+        discarded_not_litter = 0
+        discarded_uncertain = 0
         start_time = time.monotonic()
 
         while True:
@@ -78,6 +85,14 @@ class LitteringPipeline:
                 candidates = self.logic.update(frame, frame_index, timestamp_ms, vehicles, model_objects)
 
                 for candidate in candidates:
+                    if candidate.verdict == "NOT_LITTER":
+                        discarded_not_litter += 1
+                        continue
+
+                    if candidate.verdict == "UNCERTAIN" and not self.config.emit_uncertain_events:
+                        discarded_uncertain += 1
+                        continue
+
                     plate = self.plate_reader.read_plate(frame, candidate.vehicle_bbox)
                     if plate:
                         candidate.plate_text = plate.text
@@ -102,6 +117,10 @@ class LitteringPipeline:
                     )
                     self._publish_violation(metadata)
                     emitted_events += 1
+                    if evt.candidate.verdict == "UNCERTAIN":
+                        uncertain_events += 1
+                    else:
+                        confirmed_events += 1
 
                 pending = [evt for evt in pending if frame_index < evt.finalize_at]
 
@@ -118,12 +137,20 @@ class LitteringPipeline:
             )
             self._publish_violation(metadata)
             emitted_events += 1
+            if evt.candidate.verdict == "UNCERTAIN":
+                uncertain_events += 1
+            else:
+                confirmed_events += 1
 
         cap.release()
 
         return {
             "processed_frames": processed_frames,
             "emitted_events": emitted_events,
+            "confirmed_litter_events": confirmed_events,
+            "uncertain_events": uncertain_events,
+            "discarded_not_litter": discarded_not_litter,
+            "discarded_uncertain": discarded_uncertain,
         }
 
     def _extract_clip(self, frame_buffer: Deque[Tuple[int, object]], event_index: int):

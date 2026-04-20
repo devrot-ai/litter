@@ -97,8 +97,30 @@ def save_uploaded_file(uploaded) -> Path:
     return target
 
 
-def run_pipeline(source: str, api_url: str, camera_id: str, max_seconds: float | None = None) -> dict:
+def run_pipeline(
+    source: str,
+    api_url: str,
+    camera_id: str,
+    max_seconds: float | None = None,
+    min_litter_confidence: float | None = None,
+    uncertain_confidence_floor: float | None = None,
+    emit_uncertain_events: bool | None = None,
+    confirm_steps: int | None = None,
+    min_object_confidence: float | None = None,
+) -> dict:
     config = InferenceConfig()
+    if min_litter_confidence is not None:
+        config.min_litter_confidence = min_litter_confidence
+    if uncertain_confidence_floor is not None:
+        cap = max(0.0, config.min_litter_confidence - 0.01)
+        config.uncertain_confidence_floor = min(uncertain_confidence_floor, cap)
+    if emit_uncertain_events is not None:
+        config.emit_uncertain_events = emit_uncertain_events
+    if confirm_steps is not None:
+        config.confirm_steps = max(1, int(confirm_steps))
+    if min_object_confidence is not None:
+        config.min_object_confidence = min(max(0.0, min_object_confidence), 1.0)
+
     pipeline = LitteringPipeline(config=config, api_url=api_url, camera_id=camera_id)
     return pipeline.process_video(source, max_seconds=max_seconds)
 
@@ -107,12 +129,24 @@ def render_event(event: dict, api_url: str) -> None:
     event_id = event["event_id"]
     status = event["status"]
     plate_text = event.get("plate_text") or "UNKNOWN"
+    metadata = event.get("metadata_json") or {}
+    verdict = str(metadata.get("litter_verdict", "UNCERTAIN")).upper()
+    object_label = metadata.get("object_label") or "unknown"
+    object_confidence = float(metadata.get("object_confidence", 0.0) or 0.0)
 
     st.subheader(f"{event_id} | {status} | plate: {plate_text}")
     left, right = st.columns([2, 3])
 
     with left:
+        if verdict == "LITTER":
+            st.success("AI verdict: LITTER")
+        elif verdict == "UNCERTAIN":
+            st.warning("AI verdict: UNCERTAIN")
+        else:
+            st.info("AI verdict: NOT_LITTER")
+
         st.write(f"Confidence: {event['detection_confidence']:.2f}")
+        st.write(f"Detected object: {object_label} ({object_confidence:.2f})")
         st.write(f"Track ID: {event['vehicle_track_id']}")
         st.write(f"Timestamp (ms): {event['timestamp_ms']}")
         st.write(f"Camera: {event['camera_id']}")
@@ -175,6 +209,49 @@ with tabs[0]:
     st.write("Pick a recorded clip or connect a live stream.")
     mode = st.radio("Input type", options=["Recorded video", "Live stream"], horizontal=True)
 
+    ingest_defaults = InferenceConfig()
+    with st.expander("AI litter verdict settings", expanded=True):
+        st.caption("Tune how strict the AI should be when deciding if a thrown object is litter.")
+
+        tune_c1, tune_c2 = st.columns(2)
+        min_litter_confidence = tune_c1.slider(
+            "Minimum confidence to mark as litter",
+            min_value=0.50,
+            max_value=0.95,
+            value=float(ingest_defaults.min_litter_confidence),
+            step=0.01,
+        )
+
+        max_uncertain_floor = max(0.31, min_litter_confidence - 0.01)
+        uncertain_default = min(float(ingest_defaults.uncertain_confidence_floor), max_uncertain_floor)
+        uncertain_confidence_floor = tune_c2.slider(
+            "Uncertain floor (below this = not litter)",
+            min_value=0.30,
+            max_value=float(max_uncertain_floor),
+            value=float(uncertain_default),
+            step=0.01,
+        )
+
+        tune_c3, tune_c4, tune_c5 = st.columns(3)
+        confirm_steps = tune_c3.slider(
+            "Throw confirmation steps",
+            min_value=1,
+            max_value=4,
+            value=int(ingest_defaults.confirm_steps),
+            step=1,
+        )
+        min_object_confidence = tune_c4.slider(
+            "Minimum object-model confidence",
+            min_value=0.05,
+            max_value=0.95,
+            value=float(ingest_defaults.min_object_confidence),
+            step=0.01,
+        )
+        emit_uncertain_events = tune_c5.checkbox(
+            "Save uncertain events for review",
+            value=bool(ingest_defaults.emit_uncertain_events),
+        )
+
     if mode == "Recorded video":
         uploaded = st.file_uploader("Upload a video file", type=[s.lstrip(".") for s in VIDEO_SUFFIXES])
         if uploaded:
@@ -186,7 +263,16 @@ with tabs[0]:
             try:
                 video_path = save_uploaded_file(uploaded)
                 with st.spinner("Running inference on the uploaded clip..."):
-                    summary = run_pipeline(str(video_path), api_url, camera_id)
+                    summary = run_pipeline(
+                        str(video_path),
+                        api_url,
+                        camera_id,
+                        min_litter_confidence=min_litter_confidence,
+                        uncertain_confidence_floor=uncertain_confidence_floor,
+                        emit_uncertain_events=emit_uncertain_events,
+                        confirm_steps=confirm_steps,
+                        min_object_confidence=min_object_confidence,
+                    )
                 st.session_state["last_summary"] = summary
                 st.success(
                     "Done. Processed {processed_frames} frames and emitted {emitted_events} events.".format(
@@ -207,7 +293,17 @@ with tabs[0]:
         if run_stream:
             try:
                 with st.spinner("Running inference on the live stream..."):
-                    summary = run_pipeline(stream_url, api_url, camera_id, max_seconds=float(run_seconds))
+                    summary = run_pipeline(
+                        stream_url,
+                        api_url,
+                        camera_id,
+                        max_seconds=float(run_seconds),
+                        min_litter_confidence=min_litter_confidence,
+                        uncertain_confidence_floor=uncertain_confidence_floor,
+                        emit_uncertain_events=emit_uncertain_events,
+                        confirm_steps=confirm_steps,
+                        min_object_confidence=min_object_confidence,
+                    )
                 st.session_state["last_summary"] = summary
                 st.success(
                     "Done. Processed {processed_frames} frames and emitted {emitted_events} events.".format(
@@ -220,9 +316,15 @@ with tabs[0]:
 
     summary = st.session_state.get("last_summary")
     if summary:
-        m1, m2 = st.columns(2)
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Frames processed", summary.get("processed_frames", 0))
         m2.metric("Events emitted", summary.get("emitted_events", 0))
+        m3.metric("Confirmed litter", summary.get("confirmed_litter_events", 0))
+        m4.metric("Uncertain", summary.get("uncertain_events", 0))
+        st.caption(
+            "Filtered out: {discarded_not_litter} clear non-litter events and {discarded_uncertain} uncertain events."
+            .format(**summary)
+        )
 
 with tabs[1]:
     st.subheader("Review")
