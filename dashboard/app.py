@@ -176,7 +176,7 @@ def render_event(event: dict, api_url: str) -> None:
         clip_path = Path(clip_value) if clip_value else None
 
         if image_path and image_path.exists():
-            st.image(str(image_path), caption="Evidence frame", use_column_width=True)
+            st.image(str(image_path), caption="Evidence frame", use_container_width=True)
         else:
             st.info("Evidence frame not found.")
 

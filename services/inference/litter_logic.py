@@ -45,6 +45,11 @@ class LitterHeuristicEngine:
 
         blobs = self._extract_blobs(gray, model_objects)
 
+        model_blobs = [b for b in blobs if b.get("source") == "model"]
+        candidates += self._direct_detection(
+            frame_index, timestamp_ms, vehicles, model_blobs
+        )
+
         for vehicle in vehicles:
             state = self.states[vehicle.track_id]
             v_center = center_of_bbox(vehicle.bbox)
@@ -66,6 +71,7 @@ class LitterHeuristicEngine:
             blob_bbox = selected["bbox"]
             blob_conf = float(selected["confidence"])
             blob_label = str(selected.get("label", "")).strip().lower()
+            blob_source = selected.get("source", "motion")
             attach_distance_px = float(selected.get("attach_distance_px", self.config.attach_distance_px))
 
             if state.last_blob_center is not None:
@@ -86,12 +92,17 @@ class LitterHeuristicEngine:
             if frame_index - state.last_event_frame < self.config.event_cooldown_frames:
                 continue
 
-            if state.outward_steps >= self.config.confirm_steps:
+            effective_confirm = self.config.confirm_steps
+            if blob_source == "model" and blob_label in self.litter_labels:
+                effective_confirm = max(1, self.config.confirm_steps)
+
+            if state.outward_steps >= effective_confirm:
                 base_score = self._score_candidate(
                     blob_conf=blob_conf,
                     outward_steps=state.outward_steps,
                     outward_delta=state.last_outward_delta,
                     attach_distance_px=attach_distance_px,
+                    is_model_detection=(blob_source == "model"),
                 )
                 verdict, confidence, verdict_reason = self._decide_verdict(
                     base_score=base_score,
@@ -118,6 +129,66 @@ class LitterHeuristicEngine:
         self.prev_gray = gray
         return candidates
 
+    def _direct_detection(
+        self,
+        frame_index: int,
+        timestamp_ms: int,
+        vehicles: List[TrackedVehicle],
+        model_blobs: List[dict],
+    ) -> List[LitterCandidate]:
+        candidates: List[LitterCandidate] = []
+
+        for vehicle in vehicles:
+            state = self.states[vehicle.track_id]
+
+            if frame_index - state.last_event_frame < self.config.event_cooldown_frames:
+                continue
+
+            if not self._is_vehicle_moving(state.vehicle_centers):
+                continue
+
+            for blob in model_blobs:
+                label = str(blob.get("label", "")).strip().lower()
+                conf = float(blob.get("confidence", 0.0))
+
+                if label not in self.litter_labels:
+                    continue
+                if conf < max(self.config.min_label_confidence, 0.30):
+                    continue
+
+                d = distance_point_to_bbox(blob["center"], vehicle.bbox)
+                if d > self.config.attach_distance_px:
+                    continue
+
+                proximity_signal = max(0.0, 1.0 - d / max(float(self.config.attach_distance_px), 1.0))
+                score = min(0.98, 0.50 + 0.28 * conf + 0.12 * proximity_signal + 0.08)
+
+                verdict, final_conf, reason = self._decide_verdict(
+                    base_score=score,
+                    blob_label=label,
+                    blob_conf=conf,
+                )
+
+                state.last_event_frame = frame_index
+
+                candidates.append(
+                    LitterCandidate(
+                        frame_index=frame_index,
+                        vehicle_track_id=vehicle.track_id,
+                        vehicle_bbox=vehicle.bbox,
+                        object_bbox=blob["bbox"],
+                        confidence=final_conf,
+                        reason=f"direct_model_detection|{reason}",
+                        timestamp_ms=timestamp_ms,
+                        verdict=verdict,
+                        object_label=label,
+                        object_confidence=conf,
+                    )
+                )
+                break
+
+        return candidates
+
     def _extract_blobs(self, gray, model_objects: List[dict]) -> List[dict]:
         blobs: List[dict] = []
 
@@ -133,6 +204,7 @@ class LitterHeuristicEngine:
                     "bbox": (x1, y1, x2, y2),
                     "confidence": float(det.get("confidence", 0.5)),
                     "label": str(det.get("label", "")).strip().lower(),
+                    "source": "model",
                 }
             )
 
@@ -159,6 +231,7 @@ class LitterHeuristicEngine:
                     "bbox": bbox,
                     "confidence": min(0.8, area / self.config.max_blob_area),
                     "label": "",
+                    "source": "motion",
                 }
             )
 
@@ -172,8 +245,10 @@ class LitterHeuristicEngine:
             d = distance_point_to_bbox(blob["center"], vehicle_bbox)
             if d > self.config.attach_distance_px:
                 continue
-            if d < best_score:
-                best_score = d
+            adjust = 0 if blob.get("source") == "model" else 5
+            effective = d + adjust
+            if effective < best_score:
+                best_score = effective
                 best = {
                     **blob,
                     "attach_distance_px": d,
@@ -187,6 +262,7 @@ class LitterHeuristicEngine:
         outward_steps: int,
         outward_delta: float,
         attach_distance_px: float,
+        is_model_detection: bool = False,
     ) -> float:
         steps_goal = max(self.config.confirm_steps, 1)
         steps_signal = min(1.0, outward_steps / steps_goal)
@@ -194,13 +270,22 @@ class LitterHeuristicEngine:
         attach_signal = max(0.0, 1.0 - (attach_distance_px / max(float(self.config.attach_distance_px), 1.0)))
         object_signal = max(0.0, min(blob_conf, 1.0))
 
-        score = (
-            0.38
-            + 0.24 * steps_signal
-            + 0.18 * outward_signal
-            + 0.10 * attach_signal
-            + 0.10 * object_signal
-        )
+        if is_model_detection:
+            score = (
+                0.42
+                + 0.18 * steps_signal
+                + 0.12 * outward_signal
+                + 0.08 * attach_signal
+                + 0.20 * object_signal
+            )
+        else:
+            score = (
+                0.38
+                + 0.24 * steps_signal
+                + 0.18 * outward_signal
+                + 0.10 * attach_signal
+                + 0.10 * object_signal
+            )
         return max(0.0, min(0.98, score))
 
     def _decide_verdict(self, base_score: float, blob_label: str, blob_conf: float) -> tuple[str, float, str]:
@@ -256,3 +341,4 @@ def distance_point_to_bbox(point: Point, bbox: BBox) -> float:
     dx = max(x1 - x, 0, x - x2)
     dy = max(y1 - y, 0, y - y2)
     return hypot(dx, dy)
+

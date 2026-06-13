@@ -48,13 +48,28 @@ class VehicleTracker:
 
 
 class LitterObjectDetector:
-    def __init__(self, model_path: Optional[str], min_confidence: float = 0.0) -> None:
+
+    VEHICLE_LABELS = {"car", "bus", "truck", "motorcycle", "bicycle"}
+
+    def __init__(
+        self,
+        model_path: Optional[str],
+        min_confidence: float = 0.0,
+        exclude_labels: Optional[set] = None,
+    ) -> None:
         self.model = None
         self.min_confidence = min_confidence
+        self.exclude_labels: set = exclude_labels or self.VEHICLE_LABELS | {"person"}
+
         if model_path and Path(model_path).exists():
             self.model = YOLO(model_path)
+        elif model_path:
+            try:
+                self.model = YOLO(model_path)
+            except Exception:
+                self.model = None
 
-    def detect(self, frame):
+    def detect(self, frame) -> List[dict]:
         if self.model is None:
             return []
 
@@ -75,13 +90,19 @@ class LitterObjectDetector:
             if conf_value < self.min_confidence:
                 continue
 
+            label = names[int(cls_idx)].strip().lower()
+
+            if label in self.exclude_labels:
+                continue
+
             x1, y1, x2, y2 = [int(v) for v in box]
             detections.append(
                 {
                     "bbox": (x1, y1, x2, y2),
                     "confidence": conf_value,
-                    "label": names[int(cls_idx)],
+                    "label": label,
                 }
             )
 
         return detections
+

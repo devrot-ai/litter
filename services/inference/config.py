@@ -15,29 +15,35 @@ def _env_labels(name: str, default: str) -> tuple[str, ...]:
 @dataclass
 class InferenceConfig:
     vehicle_model: str = os.getenv("VEHICLE_MODEL", "yolov8n.pt")
-    litter_model: str = os.getenv("LITTER_MODEL", "")
+    litter_model: str = os.getenv("LITTER_MODEL", "yolov8n.pt")
     evidence_dir: Path = Path(os.getenv("EVIDENCE_DIR", "data/evidence"))
     clips_dir: Path = Path(os.getenv("CLIPS_DIR", "data/clips"))
     frame_skip: int = int(os.getenv("FRAME_SKIP", "1"))
-    min_object_confidence: float = float(os.getenv("MIN_OBJECT_CONFIDENCE", "0.25"))
+    min_object_confidence: float = float(os.getenv("MIN_OBJECT_CONFIDENCE", "0.20"))
     motion_threshold: int = int(os.getenv("MOTION_THRESHOLD", "18"))
     min_blob_area: int = int(os.getenv("MIN_BLOB_AREA", "40"))
     max_blob_area: int = int(os.getenv("MAX_BLOB_AREA", "3500"))
-    attach_distance_px: int = int(os.getenv("ATTACH_DISTANCE_PX", "36"))
+    attach_distance_px: int = int(os.getenv("ATTACH_DISTANCE_PX", "80"))
     outward_step_px: int = int(os.getenv("OUTWARD_STEP_PX", "3"))
     min_vehicle_motion_px: float = float(os.getenv("MIN_VEHICLE_MOTION_PX", "0.8"))
-    confirm_steps: int = int(os.getenv("CONFIRM_STEPS", "2"))
-    min_litter_confidence: float = float(os.getenv("MIN_LITTER_CONFIDENCE", "0.68"))
-    uncertain_confidence_floor: float = float(os.getenv("UNCERTAIN_CONFIDENCE_FLOOR", "0.52"))
+    confirm_steps: int = int(os.getenv("CONFIRM_STEPS", "1"))
+    min_litter_confidence: float = float(os.getenv("MIN_LITTER_CONFIDENCE", "0.58"))
+    uncertain_confidence_floor: float = float(os.getenv("UNCERTAIN_CONFIDENCE_FLOOR", "0.45"))
     emit_uncertain_events: bool = _env_bool("EMIT_UNCERTAIN_EVENTS", "true")
-    min_label_confidence: float = float(os.getenv("MIN_LABEL_CONFIDENCE", "0.4"))
+    min_label_confidence: float = float(os.getenv("MIN_LABEL_CONFIDENCE", "0.30"))
     litter_labels: tuple[str, ...] = _env_labels(
         "LITTER_LABELS",
-        "trash,litter,garbage,waste,plastic,bottle,cup,can,bag,wrapper,paper",
+        "trash,litter,garbage,waste,plastic,bottle,cup,can,bag,wrapper,paper,"
+        "handbag,backpack,umbrella,sports ball,frisbee,book,cell phone,"
+        "banana,apple,sandwich,donut,pizza,cake,vase,scissors,teddy bear,"
+        "wine glass,fork,knife,spoon,bowl,potted plant,remote,suitcase",
     )
     non_litter_labels: tuple[str, ...] = _env_labels(
         "NON_LITTER_LABELS",
-        "person,car,bus,truck,motorcycle,bicycle,bird,dog,cat",
+        "person,car,bus,truck,motorcycle,bicycle,bird,dog,cat,horse,sheep,cow,"
+        "elephant,bear,zebra,giraffe,traffic light,fire hydrant,stop sign,"
+        "parking meter,bench,couch,bed,dining table,toilet,tv,laptop,oven,"
+        "refrigerator,sink,microwave,toaster",
     )
     event_cooldown_frames: int = int(os.getenv("EVENT_COOLDOWN_FRAMES", "45"))
     clip_pre_frames: int = int(os.getenv("CLIP_PRE_FRAMES", "45"))

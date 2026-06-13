@@ -34,6 +34,7 @@ class LitteringPipeline:
         self.litter_detector = LitterObjectDetector(
             config.litter_model,
             min_confidence=config.min_object_confidence,
+            exclude_labels=set(config.non_litter_labels),
         )
         self.plate_reader = PlateReader()
         self.logic = LitterHeuristicEngine(config)
