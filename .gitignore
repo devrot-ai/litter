@@ -18,3 +18,4 @@ data/clips/*
 !data/clips/.keep
 yolov8n.pt
 runs/
+.vercel

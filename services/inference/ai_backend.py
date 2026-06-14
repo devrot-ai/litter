@@ -20,8 +20,18 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import cv2
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    class DummyNP:
+        class ndarray:
+            pass
+    np = DummyNP
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +65,7 @@ ANALYSIS_PROMPT = (
 
 def _encode_frame_base64(frame: np.ndarray, quality: int = 75) -> str:
     """Encode an OpenCV BGR frame as a base64 JPEG string."""
+    import cv2
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
     ok, buffer = cv2.imencode(".jpg", frame, encode_params)
     if not ok:

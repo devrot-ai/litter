@@ -6,7 +6,6 @@ import base64
 import logging
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
@@ -153,6 +152,7 @@ def analyze_frame(req: AIAnalyzeRequest):
     """Analyze a single base64-encoded frame for littering."""
     try:
         image_bytes = base64.b64decode(req.image_base64)
+        import numpy as np
         np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
         import cv2
         frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -181,6 +181,7 @@ async def analyze_uploaded_frame(
     """Upload an image file and analyze it for littering."""
     contents = await file.read()
     try:
+        import numpy as np
         np_arr = np.frombuffer(contents, dtype=np.uint8)
         import cv2
         frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
