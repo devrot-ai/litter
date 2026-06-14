@@ -7,3 +7,4 @@ easyocr>=1.7.2
 streamlit>=1.56.0
 numpy>=2.4.4
 requests>=2.33.1
+httpx>=0.28.0

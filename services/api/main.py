@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .database import Base, engine, get_db
 from .models import ViolationEvent
 from .schemas import ViolationCreate, ViolationRead, ViolationUpdateStatus
+from .ai_routes import router as ai_router
 
 
 app = FastAPI(title="Littering MVP API", version="0.1.0")
@@ -21,6 +22,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(ai_router)
 
 
 @app.on_event("startup")
@@ -810,6 +813,7 @@ def root() -> str:
                             <a href="#how-it-works">How It Works</a>
                             <a href="#demo">Live Demo</a>
                             <a href="#technology">Tech</a>
+                            <a href="#self-host">Self-Host</a>
                             <a href="#ethics">Ethics</a>
                             <a href="/docs">API Docs</a>
                         </nav>
@@ -899,14 +903,35 @@ def root() -> str:
                                     <div class="output-item"><span>Event ID:</span><strong id="eventLabel">-</strong></div>
                                     <div class="output-item"><span>Review Status:</span><strong id="reviewLabel">PENDING</strong></div>
                                 </div>
-                                <div class="integration-box">
-                                    <h4>API Access Key</h4>
-                                    <div class="token-row">
-                                        <input id="apiKeyInput" type="password" placeholder="Enter your API key" />
-                                        <button id="saveApiKeyBtn" class="primary" type="button">Save Key</button>
-                                        <button id="resetApiKeyBtn" type="button">Use Default Key</button>
+                                <div class="integration-box" style="margin-top:14px">
+                                    <h4>AI Backend Configuration</h4>
+                                    <p class="mini-note" style="margin:0 0 10px">Choose your AI provider. Cloud APIs need an API key; Ollama runs locally on your machine.</p>
+                                    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+                                        <label for="aiProviderSelect" style="font-weight:700;font-size:0.88rem;color:#cde0fb">Provider</label>
+                                        <select id="aiProviderSelect">
+                                            <option value="heuristic">Heuristic Only (No AI)</option>
+                                            <option value="gemini">Google Gemini</option>
+                                            <option value="openai">OpenAI (GPT-4o)</option>
+                                            <option value="claude">Anthropic Claude</option>
+                                            <option value="ollama">Ollama (Local)</option>
+                                        </select>
                                     </div>
-                                    <p class="mini-note" id="apiKeyHint"></p>
+                                    <div id="aiKeyRow" class="token-row" style="display:none;margin-bottom:8px">
+                                        <input id="aiApiKeyInput" type="password" placeholder="Enter your API key" style="flex:1 1 200px;min-width:160px" />
+                                    </div>
+                                    <div id="aiModelRow" style="display:none;margin-bottom:8px">
+                                        <input id="aiModelInput" type="text" placeholder="Model name (leave blank for default)" style="width:100%" />
+                                    </div>
+                                    <div id="ollamaRow" style="display:none;margin-bottom:8px">
+                                        <input id="ollamaUrlInput" type="text" value="http://localhost:11434" placeholder="Ollama server URL" style="width:100%;margin-bottom:6px" />
+                                        <input id="ollamaModelInput" type="text" value="llava" placeholder="Ollama model (llava, llama3.2-vision, etc.)" style="width:100%" />
+                                    </div>
+                                    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+                                        <button id="applyAiBtn" class="primary" type="button">Apply &amp; Connect</button>
+                                        <button id="testAiBtn" type="button">Test Connection</button>
+                                        <span id="aiStatusBadge" style="font-size:0.84rem;color:var(--muted)"></span>
+                                    </div>
+                                    <p class="mini-note" id="aiHint"></p>
                                 </div>
                             </article>
                         </div>
@@ -1040,6 +1065,63 @@ def root() -> str:
                         </div>
                     </section>
 
+                    <section class="section" id="self-host">
+                        <h2>Self-Host LitterCam</h2>
+                        <p class="section-sub">Run the entire system on your own machine. No cloud dependency required.</p>
+                        <div class="how-grid">
+                            <article class="how-item glass">
+                                <h3>Option A: Cloud API Key</h3>
+                                <p>Use any major LLM provider for AI-powered detection. Minimal setup, no GPU required.</p>
+                                <div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(8,16,28,0.7);font-family:monospace;font-size:0.82rem;color:#b4d0f5;line-height:1.6">
+                                    <div>pip install -r requirements.txt</div>
+                                    <div>set GEMINI_API_KEY=your-key-here</div>
+                                    <div>set AI_BACKEND=gemini</div>
+                                    <div>uvicorn services.api.main:app --reload</div>
+                                </div>
+                            </article>
+                            <article class="how-item glass">
+                                <h3>Option B: Local with Ollama</h3>
+                                <p>Run AI models on your own hardware. Completely offline and private.</p>
+                                <div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(8,16,28,0.7);font-family:monospace;font-size:0.82rem;color:#b4d0f5;line-height:1.6">
+                                    <div>ollama pull llava</div>
+                                    <div>set AI_BACKEND=ollama</div>
+                                    <div>set OLLAMA_URL=http://localhost:11434</div>
+                                    <div>uvicorn services.api.main:app --reload</div>
+                                </div>
+                            </article>
+                            <article class="how-item glass">
+                                <h3>Option C: Heuristic Only</h3>
+                                <p>Use only YOLO + motion detection. No API key, no Ollama. Basic detection.</p>
+                                <div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(8,16,28,0.7);font-family:monospace;font-size:0.82rem;color:#b4d0f5;line-height:1.6">
+                                    <div>pip install -r requirements.local.txt</div>
+                                    <div>uvicorn services.api.main:app --reload</div>
+                                </div>
+                            </article>
+                        </div>
+                        <div class="duo" style="margin-top:12px">
+                            <article class="card-item glass">
+                                <h3>Supported AI Providers</h3>
+                                <div class="chip-row" style="margin-top:8px">
+                                    <span class="chip">Google Gemini</span>
+                                    <span class="chip">OpenAI GPT-4o</span>
+                                    <span class="chip">Anthropic Claude</span>
+                                    <span class="chip">Ollama (LLaVA)</span>
+                                    <span class="chip">Heuristic (YOLO)</span>
+                                </div>
+                            </article>
+                            <article class="card-item glass">
+                                <h3>API Endpoints</h3>
+                                <ul>
+                                    <li><code>GET /ai/status</code> — Check AI backend</li>
+                                    <li><code>POST /ai/configure</code> — Set provider + key</li>
+                                    <li><code>POST /ai/analyze</code> — Analyze a frame</li>
+                                    <li><code>GET /ai/providers</code> — List all providers</li>
+                                    <li><code>GET /ai/ollama/models</code> — List local models</li>
+                                </ul>
+                            </article>
+                        </div>
+                    </section>
+
                     <p class="footer">LitterCam MVP | Real-world civic intelligence built with computer vision and verifiable enforcement workflow.</p>
                 </div>
 
@@ -1055,55 +1137,148 @@ def root() -> str:
                     const streamUrlInput = document.getElementById("streamUrlInput");
                     const loadStreamBtn = document.getElementById("loadStreamBtn");
                     const resetDemoVideoBtn = document.getElementById("resetDemoVideoBtn");
-                    const apiKeyInput = document.getElementById("apiKeyInput");
-                    const saveApiKeyBtn = document.getElementById("saveApiKeyBtn");
-                    const resetApiKeyBtn = document.getElementById("resetApiKeyBtn");
-                    const apiKeyHint = document.getElementById("apiKeyHint");
                     const DEFAULT_DEMO_VIDEO_URL = "https://filesamples.com/samples/video/mp4/sample_640x360.mp4";
-                    const DEFAULT_API_KEY = "LITTERCAM_DEMO_KEY";
-                    const API_KEY_STORAGE = "littercam_api_key";
                     let localRows = [];
+
+                    /* --- AI Backend UI elements --- */
+                    const aiProviderSelect = document.getElementById("aiProviderSelect");
+                    const aiKeyRow = document.getElementById("aiKeyRow");
+                    const aiApiKeyInput = document.getElementById("aiApiKeyInput");
+                    const aiModelRow = document.getElementById("aiModelRow");
+                    const aiModelInput = document.getElementById("aiModelInput");
+                    const ollamaRow = document.getElementById("ollamaRow");
+                    const ollamaUrlInput = document.getElementById("ollamaUrlInput");
+                    const ollamaModelInput = document.getElementById("ollamaModelInput");
+                    const applyAiBtn = document.getElementById("applyAiBtn");
+                    const testAiBtn = document.getElementById("testAiBtn");
+                    const aiStatusBadge = document.getElementById("aiStatusBadge");
+                    const aiHint = document.getElementById("aiHint");
+
+                    const AI_STORAGE_KEY = "littercam_ai_config";
 
                     function showStatus(message) {
                         statusText.textContent = message;
                     }
 
-                    function currentApiKey() {
-                        const key = String(apiKeyInput.value || "").trim();
-                        return key || DEFAULT_API_KEY;
-                    }
+                    /* --- AI Provider UI logic --- */
+                    function updateAiUI() {
+                        const provider = aiProviderSelect.value;
+                        const needsKey = ["gemini", "openai", "claude"].includes(provider);
+                        const isOllama = provider === "ollama";
+                        aiKeyRow.style.display = needsKey ? "flex" : "none";
+                        aiModelRow.style.display = (needsKey || isOllama) ? "block" : "none";
+                        ollamaRow.style.display = isOllama ? "block" : "none";
 
-                    function updateApiKeyHint() {
-                        const isDefault = currentApiKey() === DEFAULT_API_KEY;
-                        apiKeyHint.textContent = isDefault
-                            ? "Using default key for first-time access. Add your own key for private integrations."
-                            : "Custom API key active for this browser session.";
-                    }
-
-                    function initializeApiKey() {
-                        const storedKey = localStorage.getItem(API_KEY_STORAGE);
-                        if (storedKey && String(storedKey).trim()) {
-                            apiKeyInput.value = String(storedKey).trim();
-                        } else {
-                            apiKeyInput.value = DEFAULT_API_KEY;
-                            localStorage.setItem(API_KEY_STORAGE, DEFAULT_API_KEY);
+                        if (provider === "gemini") {
+                            aiApiKeyInput.placeholder = "Enter your Gemini API key";
+                            aiModelInput.placeholder = "gemini-2.0-flash (default)";
+                        } else if (provider === "openai") {
+                            aiApiKeyInput.placeholder = "Enter your OpenAI API key";
+                            aiModelInput.placeholder = "gpt-4o-mini (default)";
+                        } else if (provider === "claude") {
+                            aiApiKeyInput.placeholder = "Enter your Anthropic API key";
+                            aiModelInput.placeholder = "claude-sonnet-4-20250514 (default)";
+                        } else if (isOllama) {
+                            aiModelInput.placeholder = "Model override (uses Ollama model input below)";
                         }
-                        updateApiKeyHint();
                     }
 
-                    function persistApiKey() {
-                        localStorage.setItem(API_KEY_STORAGE, currentApiKey());
-                        updateApiKeyHint();
-                    }
-
-                    async function apiFetch(url, options = {}) {
-                        const nextOptions = { ...options };
-                        nextOptions.headers = {
-                            ...(options.headers || {}),
-                            "x-api-key": currentApiKey(),
+                    function saveAiConfig() {
+                        const config = {
+                            provider: aiProviderSelect.value,
+                            api_key: aiApiKeyInput.value,
+                            model: aiModelInput.value,
+                            ollama_url: ollamaUrlInput.value,
+                            ollama_model: ollamaModelInput.value,
                         };
-                        return fetch(url, nextOptions);
+                        localStorage.setItem(AI_STORAGE_KEY, JSON.stringify(config));
                     }
+
+                    function loadAiConfig() {
+                        try {
+                            const raw = localStorage.getItem(AI_STORAGE_KEY);
+                            if (!raw) return;
+                            const config = JSON.parse(raw);
+                            aiProviderSelect.value = config.provider || "heuristic";
+                            aiApiKeyInput.value = config.api_key || "";
+                            aiModelInput.value = config.model || "";
+                            ollamaUrlInput.value = config.ollama_url || "http://localhost:11434";
+                            ollamaModelInput.value = config.ollama_model || "llava";
+                        } catch (e) {}
+                        updateAiUI();
+                    }
+
+                    async function applyAiBackend() {
+                        const provider = aiProviderSelect.value;
+                        const model = provider === "ollama"
+                            ? (ollamaModelInput.value || "llava")
+                            : (aiModelInput.value || "");
+
+                        const payload = {
+                            provider: provider,
+                            api_key: aiApiKeyInput.value || "",
+                            model: model,
+                            ollama_url: ollamaUrlInput.value || "http://localhost:11434",
+                        };
+
+                        aiStatusBadge.textContent = "Connecting...";
+                        aiStatusBadge.style.color = "var(--warning)";
+
+                        try {
+                            const resp = await fetch("/ai/configure", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify(payload),
+                            });
+                            const data = await resp.json();
+                            if (resp.ok) {
+                                aiStatusBadge.textContent = "✓ " + data.provider + " (" + data.status + ")";
+                                aiStatusBadge.style.color = "var(--accent)";
+                                aiHint.textContent = "Backend configured: " + data.provider + " / " + data.model;
+                                saveAiConfig();
+                                showStatus("AI backend switched to " + data.provider);
+                            } else {
+                                aiStatusBadge.textContent = "✗ Error";
+                                aiStatusBadge.style.color = "var(--danger)";
+                                aiHint.textContent = data.detail || "Configuration failed.";
+                            }
+                        } catch (err) {
+                            aiStatusBadge.textContent = "✗ Offline";
+                            aiStatusBadge.style.color = "var(--danger)";
+                            aiHint.textContent = "Could not reach API: " + err.message;
+                        }
+                    }
+
+                    async function testAiConnection() {
+                        aiStatusBadge.textContent = "Testing...";
+                        aiStatusBadge.style.color = "var(--warning)";
+                        try {
+                            const resp = await fetch("/ai/status");
+                            const data = await resp.json();
+                            if (data.status === "connected" || data.status === "ok" || data.status === "configured") {
+                                aiStatusBadge.textContent = "✓ " + data.provider + " " + data.status;
+                                aiStatusBadge.style.color = "var(--accent)";
+                                aiHint.textContent = "Provider: " + data.provider + " | Model: " + data.model;
+                                if (data.available_models && data.available_models.length) {
+                                    aiHint.textContent += " | Available: " + data.available_models.join(", ");
+                                }
+                            } else {
+                                aiStatusBadge.textContent = "✗ " + (data.status || "error");
+                                aiStatusBadge.style.color = "var(--danger)";
+                                aiHint.textContent = data.detail || "Connection test failed.";
+                            }
+                        } catch (err) {
+                            aiStatusBadge.textContent = "✗ Offline";
+                            aiStatusBadge.style.color = "var(--danger)";
+                            aiHint.textContent = "Could not reach API server.";
+                        }
+                    }
+
+                    aiProviderSelect.addEventListener("change", updateAiUI);
+                    applyAiBtn.addEventListener("click", applyAiBackend);
+                    testAiBtn.addEventListener("click", testAiConnection);
+
+                    /* --- Violation console (existing logic) --- */
 
                     function randomPlate() {
                         const number = Math.floor(Math.random() * 9000) + 1000;
@@ -1227,7 +1402,7 @@ def root() -> str:
                         const query = status ? "?status=" + encodeURIComponent(status) + "&limit=200" : "?limit=200";
                         showStatus("Loading violations...");
                         try {
-                            const response = await apiFetch("/violations" + query);
+                            const response = await fetch("/violations" + query);
                             if (!response.ok) {
                                 throw new Error("Unable to load violations");
                             }
@@ -1256,7 +1431,7 @@ def root() -> str:
                     async function updateStatus(eventId, nextStatus) {
                         showStatus("Updating " + eventId + "...");
                         try {
-                            const response = await apiFetch("/violations/" + encodeURIComponent(eventId) + "/status", {
+                            const response = await fetch("/violations/" + encodeURIComponent(eventId) + "/status", {
                                 method: "PATCH",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ status: nextStatus, review_note: "updated from web console" }),
@@ -1280,7 +1455,7 @@ def root() -> str:
                     }
 
                     async function createViolation(payload) {
-                        const response = await apiFetch("/violations", {
+                        const response = await fetch("/violations", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify(payload),
@@ -1392,22 +1567,11 @@ def root() -> str:
                         showStatus("Switched to default demo feed.");
                     });
 
-                    saveApiKeyBtn.addEventListener("click", () => {
-                        persistApiKey();
-                        showStatus("API key saved for this browser.");
-                    });
-
-                    resetApiKeyBtn.addEventListener("click", () => {
-                        apiKeyInput.value = DEFAULT_API_KEY;
-                        persistApiKey();
-                        showStatus("Reverted to default API key.");
-                    });
-
-                    apiKeyInput.addEventListener("input", updateApiKeyHint);
-
+                    /* --- Init --- */
                     refreshBtn.addEventListener("click", fetchViolations);
                     statusFilter.addEventListener("change", fetchViolations);
-                    initializeApiKey();
+                    loadAiConfig();
+                    testAiConnection();
                     fetchViolations();
                 </script>
             </body>

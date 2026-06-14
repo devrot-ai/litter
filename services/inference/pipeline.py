@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass
 import json
@@ -10,12 +11,15 @@ from urllib import error, request
 
 import cv2
 
+from .ai_backend import VisionAIBackend, create_backend
 from .config import InferenceConfig
 from .detector import LitterObjectDetector, VehicleTracker
 from .evidence import EvidenceWriter
 from .litter_logic import LitterHeuristicEngine
 from .plate_reader import PlateReader
 from .types import LitterCandidate
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,6 +43,27 @@ class LitteringPipeline:
         self.plate_reader = PlateReader()
         self.logic = LitterHeuristicEngine(config)
         self.evidence = EvidenceWriter(config.evidence_dir, config.clips_dir)
+
+        # --- AI Vision Backend ---
+        self.ai_backend: VisionAIBackend = self._init_ai_backend(config)
+
+    @staticmethod
+    def _init_ai_backend(config: InferenceConfig) -> VisionAIBackend:
+        provider = config.ai_backend.lower()
+        api_key = ""
+        if provider == "gemini":
+            api_key = config.gemini_api_key
+        elif provider in ("openai", "chatgpt", "gpt"):
+            api_key = config.openai_api_key
+        elif provider in ("claude", "anthropic"):
+            api_key = config.anthropic_api_key
+
+        return create_backend(
+            provider=provider,
+            api_key=api_key,
+            model=config.ai_model or "",
+            ollama_url=config.ollama_url,
+        )
 
     def process_video(
         self,
@@ -86,6 +111,27 @@ class LitteringPipeline:
                 candidates = self.logic.update(frame, frame_index, timestamp_ms, vehicles, model_objects)
 
                 for candidate in candidates:
+                    # --- AI backend second-stage analysis ---
+                    if self.config.ai_backend.lower() != "heuristic":
+                        try:
+                            det_ctx = (
+                                f"Object: {candidate.object_label} "
+                                f"(conf={candidate.object_confidence:.2f}), "
+                                f"Heuristic verdict: {candidate.verdict} "
+                                f"(conf={candidate.confidence:.2f}), "
+                                f"Reason: {candidate.reason}"
+                            )
+                            analysis = self.ai_backend.analyze_frame(frame, det_ctx)
+                            # Let the AI override the heuristic verdict
+                            candidate.verdict = analysis.verdict
+                            candidate.confidence = analysis.confidence
+                            candidate.reason = (
+                                f"{candidate.reason}|ai={analysis.provider}:{analysis.model}"
+                                f"|ai_reasoning={analysis.reasoning}"
+                            )
+                        except Exception as exc:
+                            logger.warning("AI backend analysis failed, keeping heuristic: %s", exc)
+
                     if candidate.verdict == "NOT_LITTER":
                         discarded_not_litter += 1
                         continue

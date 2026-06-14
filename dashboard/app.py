@@ -108,18 +108,14 @@ def run_pipeline(
     confirm_steps: int | None = None,
     min_object_confidence: float | None = None,
 ) -> dict:
-    config = InferenceConfig()
-    if min_litter_confidence is not None:
-        config.min_litter_confidence = min_litter_confidence
-    if uncertain_confidence_floor is not None:
-        cap = max(0.0, config.min_litter_confidence - 0.01)
-        config.uncertain_confidence_floor = min(uncertain_confidence_floor, cap)
-    if emit_uncertain_events is not None:
-        config.emit_uncertain_events = emit_uncertain_events
-    if confirm_steps is not None:
-        config.confirm_steps = max(1, int(confirm_steps))
-    if min_object_confidence is not None:
-        config.min_object_confidence = min(max(0.0, min_object_confidence), 1.0)
+    ingest_defaults = InferenceConfig()
+    config = _build_inference_config(
+        min_litter_confidence=min_litter_confidence if min_litter_confidence is not None else ingest_defaults.min_litter_confidence,
+        uncertain_confidence_floor=uncertain_confidence_floor if uncertain_confidence_floor is not None else ingest_defaults.uncertain_confidence_floor,
+        emit_uncertain_events=emit_uncertain_events if emit_uncertain_events is not None else ingest_defaults.emit_uncertain_events,
+        confirm_steps=confirm_steps if confirm_steps is not None else ingest_defaults.confirm_steps,
+        min_object_confidence=min_object_confidence if min_object_confidence is not None else ingest_defaults.min_object_confidence,
+    )
 
     pipeline = LitteringPipeline(config=config, api_url=api_url, camera_id=camera_id)
     return pipeline.process_video(source, max_seconds=max_seconds)
@@ -201,6 +197,112 @@ if api_ok:
 else:
     setup_col3.error("API offline")
     st.caption(f"Details: {api_error}")
+
+
+# ─── AI Backend Configuration (Sidebar) ────────────────────────────────
+st.sidebar.title("AI Backend")
+
+AI_PROVIDERS = {
+    "heuristic": "Heuristic Only (No AI)",
+    "gemini": "Google Gemini",
+    "openai": "OpenAI (GPT-4o)",
+    "claude": "Anthropic Claude",
+    "ollama": "Ollama (Local)",
+}
+
+selected_provider = st.sidebar.selectbox(
+    "AI Provider",
+    options=list(AI_PROVIDERS.keys()),
+    format_func=lambda k: AI_PROVIDERS[k],
+    index=0,
+)
+
+ai_api_key = ""
+ai_model = ""
+ollama_url = "http://localhost:11434"
+
+if selected_provider in ("gemini", "openai", "claude"):
+    key_labels = {
+        "gemini": "Gemini API Key",
+        "openai": "OpenAI API Key",
+        "claude": "Anthropic API Key",
+    }
+    ai_api_key = st.sidebar.text_input(
+        key_labels[selected_provider],
+        type="password",
+        key="ai_api_key_input",
+    )
+    model_defaults = {
+        "gemini": "gemini-2.0-flash",
+        "openai": "gpt-4o-mini",
+        "claude": "claude-sonnet-4-20250514",
+    }
+    ai_model = st.sidebar.text_input(
+        "Model (blank = default)",
+        value="",
+        placeholder=model_defaults[selected_provider],
+        key="ai_model_input",
+    )
+
+elif selected_provider == "ollama":
+    ollama_url = st.sidebar.text_input(
+        "Ollama URL",
+        value="http://localhost:11434",
+        key="ollama_url_input",
+    )
+    ai_model = st.sidebar.text_input(
+        "Ollama Model",
+        value="llava",
+        placeholder="llava, llama3.2-vision, bakllava...",
+        key="ollama_model_input",
+    )
+    if st.sidebar.button("Test Ollama Connection", key="test_ollama"):
+        try:
+            import httpx
+            resp = httpx.get(f"{ollama_url}/api/tags", timeout=5.0)
+            if resp.status_code == 200:
+                models = [m["name"] for m in resp.json().get("models", [])]
+                st.sidebar.success(f"Connected! Models: {', '.join(models) or 'none pulled yet'}")
+            else:
+                st.sidebar.error(f"Ollama returned status {resp.status_code}")
+        except Exception as exc:
+            st.sidebar.error(f"Cannot reach Ollama: {exc}")
+
+elif selected_provider == "heuristic":
+    st.sidebar.info("No AI key needed. Using YOLO + motion heuristics only.")
+
+st.sidebar.divider()
+st.sidebar.caption(f"Active: **{AI_PROVIDERS[selected_provider]}**")
+
+
+def _build_inference_config(
+    min_litter_confidence, uncertain_confidence_floor,
+    emit_uncertain_events, confirm_steps, min_object_confidence,
+) -> InferenceConfig:
+    """Build an InferenceConfig with the selected AI backend."""
+    config = InferenceConfig()
+    config.min_litter_confidence = min_litter_confidence
+    cap = max(0.0, config.min_litter_confidence - 0.01)
+    config.uncertain_confidence_floor = min(uncertain_confidence_floor, cap)
+    config.emit_uncertain_events = emit_uncertain_events
+    config.confirm_steps = max(1, int(confirm_steps))
+    config.min_object_confidence = min(max(0.0, min_object_confidence), 1.0)
+
+    # AI backend settings
+    config.ai_backend = selected_provider
+    config.ai_model = ai_model
+
+    if selected_provider == "gemini":
+        config.gemini_api_key = ai_api_key
+    elif selected_provider in ("openai", "chatgpt"):
+        config.openai_api_key = ai_api_key
+    elif selected_provider in ("claude", "anthropic"):
+        config.anthropic_api_key = ai_api_key
+    elif selected_provider == "ollama":
+        config.ollama_url = ollama_url
+        config.ollama_model = ai_model or "llava"
+
+    return config
 
 tabs = st.tabs(["Ingest", "Review"])
 

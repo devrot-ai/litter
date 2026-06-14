@@ -48,3 +48,17 @@ class InferenceConfig:
     event_cooldown_frames: int = int(os.getenv("EVENT_COOLDOWN_FRAMES", "45"))
     clip_pre_frames: int = int(os.getenv("CLIP_PRE_FRAMES", "45"))
     clip_post_frames: int = int(os.getenv("CLIP_POST_FRAMES", "45"))
+
+    # --- AI Vision Backend ---
+    # Provider: "gemini", "openai", "claude", "ollama", "heuristic"
+    ai_backend: str = os.getenv("AI_BACKEND", "heuristic")
+    ai_model: str = os.getenv("AI_MODEL", "")  # override per-provider default
+
+    # Cloud API keys
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+
+    # Ollama (local hosting)
+    ollama_url: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "llava")
