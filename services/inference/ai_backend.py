@@ -16,6 +16,8 @@ import io
 import json
 import logging
 import re
+import asyncio
+import httpx
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -134,16 +136,42 @@ class VisionAIBackend(ABC):
     provider_name: str = "unknown"
 
     @abstractmethod
+    async def analyze_frame_async(
+        self,
+        frame: np.ndarray,
+        detection_context: str = "",
+    ) -> LitterAnalysis:
+        """Analyze a single video frame asynchronously."""
+
     def analyze_frame(
         self,
         frame: np.ndarray,
         detection_context: str = "",
     ) -> LitterAnalysis:
-        """Analyze a single video frame and return a litter verdict."""
+        """Analyze a single video frame synchronously."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop and loop.is_running():
+            raise RuntimeError("Called synchronous analyze_frame from inside an async loop. Use analyze_frame_async instead.")
+        return asyncio.run(self.analyze_frame_async(frame, detection_context))
+
+    async def health_check_async(self) -> Dict[str, Any]:
+        """Return connectivity / status information asynchronously."""
+        return {"provider": self.provider_name, "status": "ok"}
 
     def health_check(self) -> Dict[str, Any]:
-        """Return connectivity / status information."""
-        return {"provider": self.provider_name, "status": "ok"}
+        """Return connectivity / status information synchronously."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop and loop.is_running():
+            raise RuntimeError("Called synchronous health_check from inside an async loop. Use health_check_async instead.")
+        return asyncio.run(self.health_check_async())
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +189,7 @@ class GeminiVisionBackend(VisionAIBackend):
             f"{self.model}:generateContent?key={self.api_key}"
         )
 
-    def analyze_frame(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
-        import httpx
-
+    async def analyze_frame_async(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
         b64 = _encode_frame_base64(frame)
         prompt = ANALYSIS_PROMPT.format(detections=detection_context or "none")
 
@@ -184,7 +210,8 @@ class GeminiVisionBackend(VisionAIBackend):
         }
 
         try:
-            resp = httpx.post(self._endpoint, json=payload, timeout=30.0)
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(self._endpoint, json=payload, timeout=30.0)
             resp.raise_for_status()
             data = resp.json()
             raw = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -199,14 +226,14 @@ class GeminiVisionBackend(VisionAIBackend):
         parsed = _parse_llm_json(raw)
         return _build_analysis(parsed, raw, "gemini", self.model)
 
-    def health_check(self) -> Dict[str, Any]:
-        import httpx
+    async def health_check_async(self) -> Dict[str, Any]:
         try:
             url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
                 f"{self.model}?key={self.api_key}"
             )
-            resp = httpx.get(url, timeout=10.0)
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, timeout=10.0)
             return {
                 "provider": "gemini",
                 "model": self.model,
@@ -229,9 +256,7 @@ class OpenAIVisionBackend(VisionAIBackend):
         self.model = model
         self._endpoint = "https://api.openai.com/v1/chat/completions"
 
-    def analyze_frame(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
-        import httpx
-
+    async def analyze_frame_async(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
         b64 = _encode_frame_base64(frame)
         prompt = ANALYSIS_PROMPT.format(detections=detection_context or "none")
 
@@ -261,7 +286,8 @@ class OpenAIVisionBackend(VisionAIBackend):
         }
 
         try:
-            resp = httpx.post(self._endpoint, json=payload, headers=headers, timeout=30.0)
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(self._endpoint, json=payload, headers=headers, timeout=30.0)
             resp.raise_for_status()
             data = resp.json()
             raw = data["choices"][0]["message"]["content"]
@@ -276,14 +302,14 @@ class OpenAIVisionBackend(VisionAIBackend):
         parsed = _parse_llm_json(raw)
         return _build_analysis(parsed, raw, "openai", self.model)
 
-    def health_check(self) -> Dict[str, Any]:
-        import httpx
+    async def health_check_async(self) -> Dict[str, Any]:
         try:
-            resp = httpx.get(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=10.0,
-            )
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    timeout=10.0,
+                )
             return {
                 "provider": "openai",
                 "model": self.model,
@@ -306,9 +332,7 @@ class ClaudeVisionBackend(VisionAIBackend):
         self.model = model
         self._endpoint = "https://api.anthropic.com/v1/messages"
 
-    def analyze_frame(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
-        import httpx
-
+    async def analyze_frame_async(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
         b64 = _encode_frame_base64(frame)
         prompt = ANALYSIS_PROMPT.format(detections=detection_context or "none")
 
@@ -340,7 +364,8 @@ class ClaudeVisionBackend(VisionAIBackend):
         }
 
         try:
-            resp = httpx.post(self._endpoint, json=payload, headers=headers, timeout=30.0)
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(self._endpoint, json=payload, headers=headers, timeout=30.0)
             resp.raise_for_status()
             data = resp.json()
             raw = data["content"][0]["text"]
@@ -355,7 +380,7 @@ class ClaudeVisionBackend(VisionAIBackend):
         parsed = _parse_llm_json(raw)
         return _build_analysis(parsed, raw, "claude", self.model)
 
-    def health_check(self) -> Dict[str, Any]:
+    async def health_check_async(self) -> Dict[str, Any]:
         # Claude doesn't have a lightweight health endpoint;
         # just confirm the key looks valid.
         return {
@@ -380,9 +405,7 @@ class OllamaVisionBackend(VisionAIBackend):
         self.base_url = base_url.rstrip("/")
         self.model = model
 
-    def analyze_frame(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
-        import httpx
-
+    async def analyze_frame_async(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
         b64 = _encode_frame_base64(frame)
         prompt = ANALYSIS_PROMPT.format(detections=detection_context or "none")
 
@@ -394,11 +417,12 @@ class OllamaVisionBackend(VisionAIBackend):
         }
 
         try:
-            resp = httpx.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=120.0,  # local models can be slow
-            )
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self.base_url}/api/generate",
+                    json=payload,
+                    timeout=120.0,  # local models can be slow
+                )
             resp.raise_for_status()
             data = resp.json()
             raw = data.get("response", "")
@@ -413,10 +437,10 @@ class OllamaVisionBackend(VisionAIBackend):
         parsed = _parse_llm_json(raw)
         return _build_analysis(parsed, raw, "ollama", self.model)
 
-    def health_check(self) -> Dict[str, Any]:
-        import httpx
+    async def health_check_async(self) -> Dict[str, Any]:
         try:
-            resp = httpx.get(f"{self.base_url}/api/tags", timeout=5.0)
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self.base_url}/api/tags", timeout=5.0)
             if resp.status_code == 200:
                 models = [m["name"] for m in resp.json().get("models", [])]
                 return {
@@ -432,8 +456,8 @@ class OllamaVisionBackend(VisionAIBackend):
 
     def list_models(self) -> List[str]:
         """Return model names available on the Ollama server."""
-        import httpx
         try:
+            # this is mostly a synchronous fallback for legacy clients
             resp = httpx.get(f"{self.base_url}/api/tags", timeout=5.0)
             resp.raise_for_status()
             return [m["name"] for m in resp.json().get("models", [])]
@@ -449,7 +473,7 @@ class HeuristicOnlyBackend(VisionAIBackend):
     """Pass-through that relies entirely on the existing YOLO + motion logic."""
     provider_name = "heuristic"
 
-    def analyze_frame(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
+    async def analyze_frame_async(self, frame: np.ndarray, detection_context: str = "") -> LitterAnalysis:
         return LitterAnalysis(
             verdict="UNCERTAIN",
             confidence=0.50,
@@ -458,7 +482,7 @@ class HeuristicOnlyBackend(VisionAIBackend):
             model="yolov8n",
         )
 
-    def health_check(self) -> Dict[str, Any]:
+    async def health_check_async(self) -> Dict[str, Any]:
         return {"provider": "heuristic", "status": "ok", "detail": "No external API needed."}
 
 

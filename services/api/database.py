@@ -11,9 +11,14 @@ def _is_serverless_runtime() -> bool:
     return bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def _default_db_url() -> str:
     # Lambda-based runtimes only allow writing under /tmp.
     if _is_serverless_runtime():
+        logger.warning("Using ephemeral SQLite database in /tmp on serverless runtime. Data WILL be lost. Set LITTER_DB_URL to a persistent database (e.g. PostgreSQL).")
         return "sqlite:////tmp/litter_events.db"
     return "sqlite:///./litter_events.db"
 

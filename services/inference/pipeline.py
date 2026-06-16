@@ -236,5 +236,5 @@ class LitteringPipeline:
         try:
             with request.urlopen(req, timeout=8) as resp:
                 resp.read()
-        except error.URLError:
-            pass
+        except error.URLError as e:
+            logger.error("Failed to publish violation to API: %s", e)

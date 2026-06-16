@@ -104,10 +104,10 @@ def list_ai_providers():
 
 
 @router.get("/status", response_model=AIStatusResponse)
-def ai_status():
+async def ai_status():
     """Return current AI backend status and connectivity."""
     backend = _state.get_backend()
-    info = backend.health_check()
+    info = await backend.health_check_async()
     return AIStatusResponse(
         provider=info.get("provider", _state.provider),
         model=info.get("model", _state.model),
@@ -118,7 +118,7 @@ def ai_status():
 
 
 @router.post("/configure", response_model=AIConfigureResponse)
-def configure_ai(req: AIConfigureRequest):
+async def configure_ai(req: AIConfigureRequest):
     """Set the active AI backend at runtime."""
     from services.inference.ai_backend import create_backend
 
@@ -139,7 +139,7 @@ def configure_ai(req: AIConfigureRequest):
     _state.ollama_url = req.ollama_url
     _state.reset_backend()
 
-    info = backend.health_check()
+    info = await backend.health_check_async()
     return AIConfigureResponse(
         provider=req.provider,
         model=req.model or info.get("model", "default"),
@@ -148,21 +148,30 @@ def configure_ai(req: AIConfigureRequest):
 
 
 @router.post("/analyze", response_model=AIAnalysisResponse)
-def analyze_frame(req: AIAnalyzeRequest):
+async def analyze_frame(req: AIAnalyzeRequest):
     """Analyze a single base64-encoded frame for littering."""
+    if len(req.image_base64) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Payload too large")
+
     try:
-        image_bytes = base64.b64decode(req.image_base64)
+        from fastapi.concurrency import run_in_threadpool
+        import base64
         import numpy as np
-        np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
         import cv2
-        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        def decode_img():
+            image_bytes = base64.b64decode(req.image_base64)
+            np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
+            return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            
+        frame = await run_in_threadpool(decode_img)
         if frame is None:
             raise ValueError("Could not decode image")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
 
     backend = _state.get_backend()
-    result = backend.analyze_frame(frame, req.detection_context)
+    result = await backend.analyze_frame_async(frame, req.detection_context)
 
     return AIAnalysisResponse(
         verdict=result.verdict,
@@ -180,18 +189,26 @@ async def analyze_uploaded_frame(
 ):
     """Upload an image file and analyze it for littering."""
     contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large")
+        
     try:
+        from fastapi.concurrency import run_in_threadpool
         import numpy as np
-        np_arr = np.frombuffer(contents, dtype=np.uint8)
         import cv2
-        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        def decode_upload():
+            np_arr = np.frombuffer(contents, dtype=np.uint8)
+            return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        frame = await run_in_threadpool(decode_upload)
         if frame is None:
             raise ValueError("Could not decode image")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
 
     backend = _state.get_backend()
-    result = backend.analyze_frame(frame, detection_context)
+    result = await backend.analyze_frame_async(frame, detection_context)
 
     return AIAnalysisResponse(
         verdict=result.verdict,
