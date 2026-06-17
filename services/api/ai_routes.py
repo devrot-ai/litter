@@ -188,9 +188,20 @@ async def analyze_uploaded_frame(
     detection_context: str = Form(""),
 ):
     """Upload an image file and analyze it for littering."""
+    # Validate file type
+    ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"}
+    ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
+    if file.content_type and file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {file.content_type}. Allowed: {', '.join(ALLOWED_TYPES)}")
+    if file.filename:
+        import os
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext and ext not in ALLOWED_EXTS:
+            raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+
     contents = await file.read()
     if len(contents) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large")
+        raise HTTPException(status_code=413, detail="File too large (max 10MB)")
         
     try:
         from fastapi.concurrency import run_in_threadpool
