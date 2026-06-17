@@ -1,34 +1,129 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    _HAS_SLOWAPI = True
+except ImportError:
+    _HAS_SLOWAPI = False
 
 from .database import Base, engine, get_db
 from .models import ViolationEvent
 from .schemas import ViolationCreate, ViolationRead, ViolationUpdateStatus
 from .ai_routes import router as ai_router
 
+logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Littering MVP API", version="0.1.0")
+# ---------------------------------------------------------------------------
+# Security: API key for mutation endpoints (optional — set via env var)
+# ---------------------------------------------------------------------------
+API_KEY = os.getenv("LITTERCAM_API_KEY", "")
 
+# ---------------------------------------------------------------------------
+# Security: Allowed CORS origins
+# ---------------------------------------------------------------------------
+_CORS_ORIGINS = [
+    "https://littercam.vercel.app",
+    "http://localhost:8000",
+    "http://localhost:3000",
+    "http://127.0.0.1:8000",
+]
+# Allow overriding via env for custom deployments
+_extra_origins = os.getenv("LITTERCAM_CORS_ORIGINS", "")
+if _extra_origins:
+    _CORS_ORIGINS.extend([o.strip() for o in _extra_origins.split(",") if o.strip()])
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter setup
+# ---------------------------------------------------------------------------
+if _HAS_SLOWAPI:
+    limiter = Limiter(key_func=get_remote_address)
+else:
+    limiter = None
+
+
+# ---------------------------------------------------------------------------
+# Lifespan (replaces deprecated @app.on_event)
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created/verified.")
+    yield
+
+
+app = FastAPI(title="Littering MVP API", version="0.2.0", lifespan=lifespan)
+
+# --- Middleware stack (order matters: last added = first executed) ---
+
+# 1. CORS — locked to known origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
+# 2. GZip compression — reduces ~80KB HTML to ~10KB
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+# 3. Rate limiter
+if _HAS_SLOWAPI and limiter:
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# ---------------------------------------------------------------------------
+# Security headers middleware
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # CSP: allow inline styles/scripts (needed for the inline HTML page) + known video sources
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob: https://samplelib.com https://filesamples.com; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    return response
+
+
+# ---------------------------------------------------------------------------
+# API key dependency for mutation endpoints
+# ---------------------------------------------------------------------------
+def verify_api_key(request: Request):
+    """If LITTERCAM_API_KEY env var is set, require it on mutation endpoints."""
+    if not API_KEY:
+        return  # No key configured — allow all (dev mode)
+    key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+    if key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
 app.include_router(ai_router)
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
 
 
 @app.get("/health")
@@ -36,9 +131,24 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# Landing page — cached HTML with security headers
+# ---------------------------------------------------------------------------
+_LANDING_HTML: str | None = None
+
+
 @app.get("/", response_class=HTMLResponse)
-def root() -> str:
-        return """
+def root() -> HTMLResponse:
+    global _LANDING_HTML
+    if _LANDING_HTML is None:
+        _LANDING_HTML = _build_landing_html()
+    resp = HTMLResponse(content=_LANDING_HTML)
+    resp.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
+    return resp
+
+
+def _build_landing_html() -> str:
+    return """
         <!doctype html>
         <html lang="en">
             <head>
@@ -820,7 +930,7 @@ def root() -> str:
                     </header>
 
                     <section class="hero glass" id="hero">
-                        <video autoplay muted loop playsinline>
+                        <video autoplay muted loop playsinline preload="none">
                             <source src="https://samplelib.com/lib/preview/mp4/sample-5s.mp4" type="video/mp4" />
                         </video>
                         <div class="hero-content">
@@ -1184,9 +1294,11 @@ def root() -> str:
                     }
 
                     function saveAiConfig() {
+                        /* Security: Do NOT store API keys in localStorage.
+                           Only persist non-sensitive config. Keys are sent
+                           directly to the backend and held in server memory. */
                         const config = {
                             provider: aiProviderSelect.value,
-                            api_key: aiApiKeyInput.value,
                             model: aiModelInput.value,
                             ollama_url: ollamaUrlInput.value,
                             ollama_model: ollamaModelInput.value,
@@ -1579,6 +1691,7 @@ def root() -> str:
         """
 
 
+
 def _row_to_response(row: ViolationEvent) -> ViolationEvent:
     if isinstance(row.metadata_json, str):
         row.metadata_json = json.loads(row.metadata_json or "{}")
@@ -1586,7 +1699,14 @@ def _row_to_response(row: ViolationEvent) -> ViolationEvent:
 
 
 @app.post("/violations", response_model=ViolationRead)
-def create_violation(payload: ViolationCreate, db: Session = Depends(get_db)):
+def create_violation(
+    payload: ViolationCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_api_key),
+):
+    if _HAS_SLOWAPI and limiter:
+        limiter.limit("30/minute")(lambda: None)()
     existing = db.query(ViolationEvent).filter(ViolationEvent.event_id == payload.event_id).first()
     if existing:
         return _row_to_response(existing)
@@ -1628,7 +1748,17 @@ def list_violations(
 
 
 @app.patch("/violations/{event_id}/status", response_model=ViolationRead)
-def update_status(event_id: str, payload: ViolationUpdateStatus, db: Session = Depends(get_db)):
+def update_status(
+    event_id: str,
+    payload: ViolationUpdateStatus,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_api_key),
+):
+    # Validate event_id length to prevent abuse
+    if len(event_id) > 128:
+        raise HTTPException(status_code=400, detail="event_id too long")
+
     row = db.query(ViolationEvent).filter(ViolationEvent.event_id == event_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Violation not found")
